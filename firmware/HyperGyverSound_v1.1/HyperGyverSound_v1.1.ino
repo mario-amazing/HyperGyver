@@ -15,9 +15,10 @@
 // ===== НАСТРОЙКИ =====
 #define EDGE_LEDS 11    // кол-во диодов на ребре куба
 #define LED_DI 2        // пин подключения
+#define SWITCH_MODE_DI 5// пин подключения свича модов
 #define BRIGHT 255      // яркость
 #define CHANGE_PRD 20   // смена режима, секунд
-#define CUR_LIMIT 800  // лимит тока в мА (0 - выкл)
+#define CUR_LIMIT 3000  // лимит тока в мА (0 - выкл)
 
 #define VOL_THR 20
 #define ADC_PIN A0
@@ -32,11 +33,14 @@ const int LINE_SIZE = EDGE_LEDS;
 #define PAL_STEP 30
 CRGB leds[NUM_LEDS];
 
-int perlinPoint;
+#include "GyverButton.h"
+GButton manualChangeModeButton(3, HIGH_PULL, NORM_CLOSE);
+
 int curBright = BRIGHT;
 bool fadeFlag = false;
 bool mode = false;
 bool colorMode = false;
+bool autoChangeMode = true;
 uint16_t counter = 0;
 byte speed = 15;
 uint32_t tmrDraw, tmrColor, tmrFade;
@@ -56,7 +60,6 @@ void setup() {
   FastLED.clear();
 
   randomSeed(getEntropy(A1));   // My system's in decline, EMBRACING ENTROPY!
-  perlinPoint = random(0, 32768);
   fadeFlag = true;  // сразу флаг на смену режима
 
   // ускоряем АЦП
@@ -64,20 +67,26 @@ void setup() {
   bitClear(ADCSRA, ADPS1);
   bitSet(ADCSRA, ADPS0);
 
-  pinMode(3, INPUT_PULLUP);
+  manualChangeModeButton.setTimeout(400);
+  pinMode(SWITCH_MODE_DI, INPUT);
 }
 
-bool flag = false;
 void loop() {
-  // читаем инвертированное значение для удобства
-  bool btnState = !digitalRead(3);
-  if (btnState && !flag) {  // обработчик нажатия
-    soundMode = !soundMode;
-    flag = true;
-    delay(100);   // бич-дебаунс
+  bool switchState = !digitalRead(SWITCH_MODE_DI);
+  if (soundMode != switchState){
+    soundMode = switchState;
+    autoChangeMode = true;
+    tmrColor = millis();
   }
-  if (!btnState && flag) {  // обработчик отпускания
-    flag = false;
+
+  manualChangeModeButton.tick();
+  if (manualChangeModeButton.isPress()) {
+    autoChangeMode = false;
+    tmrColor = millis();
+    changeMode();
+  }
+  if (manualChangeModeButton.isHolded()) {
+    autoChangeMode = true;
   }
 
   // отрисовка
@@ -130,7 +139,7 @@ void loop() {
       // обычные режимы
       for (int i = 0; i < FACE_SIZE; i++) {
         if (mode) fillSimple(i, ColorFromPalette(currentPalette, getMaxNoise(i * PAL_STEP + counter, counter), 255, LINEARBLEND));
-        else fillVertex(i, ColorFromPalette(currentPalette, getMaxNoise(i * PAL_STEP / 4 + counter, counter), 255, LINEARBLEND));
+        else fillVertex(i, ColorFromPalette(currentPalette, (float)255 * i / FACE_SIZE / 2 + counter / 4, 255, LINEARBLEND));
       }
     }
 
@@ -141,7 +150,12 @@ void loop() {
   // смена режима и цвета
   if (millis() - tmrColor >= CHANGE_PRD * 1000L) {
     tmrColor = millis();
-    fadeFlag = true;
+    if (autoChangeMode) {
+      fadeFlag = true;
+    }
+    else {
+      changePalette();
+    }
   }
 
   // фейдер для смены через чёрный
@@ -168,11 +182,15 @@ void loop() {
 
 void changeMode() {
   if (!random(3)) mode = !mode;
-  speed = random(1, 5);
   colorMode = !colorMode;
+  changePalette();
+}
+
+void changePalette() {
+  speed = random(1, 5);
   int thisDebth = random(0, 32768);
   byte thisStep = random(2, 7) * 5;
-  bool sparkles = /*!random(4)*/true;
+  bool sparkles = !random(4);
 
   if (colorMode) {
     for (int i = 0; i < 16; i++) {
@@ -182,7 +200,7 @@ void changeMode() {
     }
   } else {
     for (int i = 0; i < 4; i++) {
-      CHSV color = CHSV(random(0, 256), bool(random(0, 3)) * 255, /*(uint8_t)(i + 1) * 64 - 1*/bool(random(0, 3)) * 255);
+      CHSV color = CHSV(random(0, 256), bool(random(0, 3)) * 255, random(0, 256));
       for (byte j = 0; j < 4; j++) {
         currentPalette[i * 4 + j] = color;
       }
